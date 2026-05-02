@@ -9,8 +9,7 @@ func _ready() -> void:
 	_gallery = preload("res://scenes/GalleryView.tscn").instantiate()
 	add_child(_gallery)
 
-	_viewer = preload("res://scripts/MediaViewer.gd").new()
-	_viewer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_viewer = preload("res://scenes/MediaViewer.tscn").instantiate()
 	_viewer.visible = false
 	add_child(_viewer)
 

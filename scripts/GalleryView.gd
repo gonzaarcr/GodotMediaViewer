@@ -8,9 +8,10 @@ const VIDEO_EXT := ["mp4", "webm", "ogv", "avi", "mkv", "mov"]
 const THUMB_W   := 168
 const THUMB_H   := 148
 const THUMB_IMG := 128
-const ZOOM_MIN  := 0.5
-const ZOOM_MAX  := 2.5
-const ZOOM_STEP := 0.25
+const ZOOM_MIN   := 0.5
+const ZOOM_MAX   := 2.5
+const ZOOM_STEP  := 0.25
+const PREFS_PATH := "user://prefs.cfg"
 
 var _zoom: float = 1.0
 var _selected_index: int = -1
@@ -21,6 +22,10 @@ var _subfolders: Array[String] = []  # subdirectory paths in current folder
 var _history: Array[String] = []     # visited folder paths
 var _history_pos: int = -1           # current position in _history
 
+enum SortMode { NAME, MODIFIED, SIZE, TYPE }
+var _sort_mode: SortMode = SortMode.NAME
+var _sort_asc: bool = true
+
 @onready var _grid: GridContainer = %Grid
 @onready var _status_label: Label = %StatusLabel
 @onready var _breadcrumb_bar: HBoxContainer = %BreadcrumbBar
@@ -29,13 +34,13 @@ var _history_pos: int = -1           # current position in _history
 @onready var _up_btn: Button = %UpBtn
 @onready var _zoom_slider: HSlider = %ZoomSlider
 @onready var _zoom_pct_lbl: Label = %ZoomPctLbl
+@onready var _sort_btn: OptionButton = %SortBtn
+@onready var _sort_dir_btn: Button = %SortDirBtn
 
 
 # ──────────────────────────── Setup ────────────────────────────────
 
 func _ready() -> void:
-	%OpenFilesBtn.pressed.connect(_show_file_dialog)
-	%OpenFolderBtn.pressed.connect(_show_folder_dialog)
 	%UpBtn.pressed.connect(_go_up)
 	%CrumbScroll.gui_input.connect(_on_crumb_area_input)
 	%PathEdit.text_submitted.connect(_on_path_submitted)
@@ -45,11 +50,19 @@ func _ready() -> void:
 	%ZoomSlider.value_changed.connect(_on_zoom_changed)
 	%ZoomInBtn.pressed.connect(_zoom_in)
 
+	for entry in [["Name", SortMode.NAME], ["Modified", SortMode.MODIFIED],
+			["Size", SortMode.SIZE], ["Type", SortMode.TYPE]]:
+		%SortBtn.add_item(entry[0], entry[1])
+	%SortBtn.selected = 0
+	%SortBtn.item_selected.connect(_on_sort_mode_changed)
+	%SortDirBtn.pressed.connect(_on_sort_dir_toggled)
+
 	var win := get_window()
 	if win:
 		win.files_dropped.connect(_on_files_dropped)
 
 	_update_columns()
+	_load_prefs()
 
 	# Open Downloads by default; fall back to home directory.
 	var dl := OS.get_system_dir(OS.SYSTEM_DIR_DOWNLOADS)
@@ -101,12 +114,9 @@ func _navigate_to(folder: String, push_history: bool = true) -> void:
 		fname = dir.get_next()
 	dir.list_dir_end()
 
-	_subfolders.sort()
-	_files.sort()
-
 	_up_btn.disabled = (folder.get_base_dir() == folder)
 	_update_breadcrumbs()
-	_refresh_grid()
+	_apply_sort()
 
 
 func _go_back() -> void:
@@ -241,7 +251,7 @@ func _do_tab_complete() -> void:
 		return
 
 	if matches.size() == 1:
-		_path_edit.text = dir_part + matches[0] + "/"
+		_path_edit.text = dir_part.path_join(matches[0]) + "/"
 	else:
 		var common := matches[0]
 		for m in matches.slice(1):
@@ -249,7 +259,7 @@ func _do_tab_complete() -> void:
 			while i < common.length() and i < m.length() and common[i] == m[i]:
 				i += 1
 			common = common.substr(0, i)
-		_path_edit.text = dir_part + common
+		_path_edit.text = dir_part.path_join(common)
 
 	_path_edit.caret_column = _path_edit.text.length()
 
@@ -302,6 +312,7 @@ func _make_folder_item(path: String) -> Control:
 	var bg := ColorRect.new()
 	bg.custom_minimum_size = Vector2(tw - 8, ti)
 	bg.color = Color("#252515")
+	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vbox.add_child(bg)
 
 	var icon := Label.new()
@@ -345,6 +356,7 @@ func _make_file_thumb(index: int) -> Control:
 		var placeholder := ColorRect.new()
 		placeholder.custom_minimum_size = Vector2(tw - 8, ti)
 		placeholder.color = Color("#1a2040")
+		placeholder.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		vbox.add_child(placeholder)
 
 		var lbl := Label.new()
@@ -394,11 +406,77 @@ func _zoom_out() -> void:
 func _on_zoom_changed(value: float) -> void:
 	_zoom = clampf(value, ZOOM_MIN, ZOOM_MAX)
 	if is_instance_valid(_zoom_slider):
-		_zoom_slider.value = _zoom
+		_zoom_slider.set_value_no_signal(_zoom)
 	if is_instance_valid(_zoom_pct_lbl):
 		_zoom_pct_lbl.text = "%d%%" % int(_zoom * 100)
 	_refresh_grid()
-	_update_columns()
+	_save_prefs()
+
+
+# ──────────────────────────── Sorting ──────────────────────────────
+
+func _on_sort_mode_changed(index: int) -> void:
+	_sort_mode = index as SortMode
+	_apply_sort()
+	_save_prefs()
+
+
+func _on_sort_dir_toggled() -> void:
+	_sort_asc = not _sort_asc
+	_sort_dir_btn.text = "↑" if _sort_asc else "↓"
+	_apply_sort()
+	_save_prefs()
+
+
+func _load_prefs() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(PREFS_PATH) != OK:
+		return
+	_zoom = clampf(cfg.get_value("gallery", "zoom", _zoom), ZOOM_MIN, ZOOM_MAX)
+	_zoom_slider.set_value_no_signal(_zoom)
+	_zoom_pct_lbl.text = "%d%%" % int(_zoom * 100)
+	_sort_mode = cfg.get_value("gallery", "sort_mode", _sort_mode) as SortMode
+	_sort_btn.select(_sort_mode)
+	_sort_asc = cfg.get_value("gallery", "sort_asc", _sort_asc)
+	_sort_dir_btn.text = "↑" if _sort_asc else "↓"
+
+
+func _save_prefs() -> void:
+	var cfg := ConfigFile.new()
+	cfg.set_value("gallery", "zoom", _zoom)
+	cfg.set_value("gallery", "sort_mode", int(_sort_mode))
+	cfg.set_value("gallery", "sort_asc", _sort_asc)
+	cfg.save(PREFS_PATH)
+
+
+func _apply_sort() -> void:
+	var file_cmp := _make_file_cmp()
+	_files.sort_custom(file_cmp)
+	_subfolders.sort_custom(func(a, b): return a.get_file().to_lower() < b.get_file().to_lower())
+	if not _sort_asc:
+		_files.reverse()
+		_subfolders.reverse()
+	_refresh_grid()
+
+
+func _make_file_cmp() -> Callable:
+	match _sort_mode:
+		SortMode.MODIFIED:
+			return func(a, b): return FileAccess.get_modified_time(a) < FileAccess.get_modified_time(b)
+		SortMode.SIZE:
+			return func(a, b):
+				var fa := FileAccess.open(a, FileAccess.READ)
+				var fb := FileAccess.open(b, FileAccess.READ)
+				var sa := fa.get_length() if fa else 0
+				var sb := fb.get_length() if fb else 0
+				return sa < sb
+		SortMode.TYPE:
+			return func(a, b):
+				var ea: String = a.get_extension().to_lower()
+				var eb: String = b.get_extension().to_lower()
+				return ea < eb if ea != eb else a.get_file().to_lower() < b.get_file().to_lower()
+		_:
+			return func(a, b): return a.get_file().to_lower() < b.get_file().to_lower()
 
 
 func _select_grid_item(index: int) -> void:
@@ -465,59 +543,6 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			_zoom_out()
 			get_viewport().set_input_as_handled()
-
-
-# ──────────────────────────── Dialogs ──────────────────────────────
-
-func _show_file_dialog() -> void:
-	var dlg := FileDialog.new()
-	dlg.file_mode = FileDialog.FILE_MODE_OPEN_FILES
-	dlg.access    = FileDialog.ACCESS_FILESYSTEM
-	dlg.title     = "Select Media Files"
-	dlg.filters   = PackedStringArray([
-		"*.png,*.jpg,*.jpeg,*.bmp,*.webp,*.tga,*.svg,*.mp4,*.webm,*.ogv,*.avi,*.mkv,*.mov ; All Media",
-		"*.png,*.jpg,*.jpeg,*.bmp,*.webp,*.tga,*.svg ; Images",
-		"*.mp4,*.webm,*.ogv,*.avi,*.mkv,*.mov ; Videos",
-	])
-	if _current_folder != "":
-		dlg.current_dir = _current_folder
-	dlg.files_selected.connect(func(paths: PackedStringArray) -> void:
-		dlg.queue_free()
-		var collected: Array[String] = []
-		for path in paths:
-			var ext := path.get_extension().to_lower()
-			if ext in IMAGE_EXT or ext in VIDEO_EXT:
-				collected.append(path)
-		if collected.is_empty():
-			return
-		collected.sort()
-		# Show the files without changing folder navigation state.
-		_files = collected
-		_subfolders.clear()
-		_status_label.visible = false
-		for c in _grid.get_children():
-			c.queue_free()
-		for i in _files.size():
-			_grid.add_child(_make_file_thumb(i))
-		_update_columns()
-	)
-	add_child(dlg)
-	dlg.popup_centered(Vector2i(900, 650))
-
-
-func _show_folder_dialog() -> void:
-	var dlg := FileDialog.new()
-	dlg.file_mode = FileDialog.FILE_MODE_OPEN_DIR
-	dlg.access    = FileDialog.ACCESS_FILESYSTEM
-	dlg.title     = "Select Folder"
-	if _current_folder != "":
-		dlg.current_dir = _current_folder
-	dlg.dir_selected.connect(func(path: String) -> void:
-		dlg.queue_free()
-		_navigate_to(path)
-	)
-	add_child(dlg)
-	dlg.popup_centered(Vector2i(900, 650))
 
 
 # ──────────────────────────── Drag-and-drop ────────────────────────
