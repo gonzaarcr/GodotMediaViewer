@@ -1,0 +1,202 @@
+[gd_scene load_steps=2 format=3 uid="uid://gallery_view_001"]
+
+[ext_resource type="Script" path="res://scripts/GalleryView.gd" id="1_galview"]
+
+[node name="GalleryView" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_galview")
+
+[node name="Bg" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.094118, 0.094118, 0.12549, 1)
+
+[node name="VBox" type="VBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 0
+
+[node name="Header" type="PanelContainer" parent="VBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 54)
+
+[node name="HeaderHBox" type="HBoxContainer" parent="VBox/Header"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="LeftPad" type="Control" parent="VBox/Header/HeaderHBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(8, 0)
+
+[node name="Title" type="Label" parent="VBox/Header/HeaderHBox"]
+layout_mode = 2
+vertical_alignment = 1
+text = "Gallery Viewer"
+theme_override_font_sizes/font_size = 17
+
+[node name="Spacer" type="Control" parent="VBox/Header/HeaderHBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="OpenFilesBtn" type="Button" parent="VBox/Header/HeaderHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+custom_minimum_size = Vector2(0, 36)
+text = "  Open File(s)  "
+
+[node name="OpenFolderBtn" type="Button" parent="VBox/Header/HeaderHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+custom_minimum_size = Vector2(0, 36)
+text = "  Open Folder  "
+
+[node name="RightPad" type="Control" parent="VBox/Header/HeaderHBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(8, 0)
+
+[node name="NavBar" type="PanelContainer" parent="VBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 36)
+
+[node name="NavHBox" type="HBoxContainer" parent="VBox/NavBar"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="NavLeftPad" type="Control" parent="VBox/NavBar/NavHBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(4, 0)
+
+[node name="UpBtn" type="Button" parent="VBox/NavBar/NavHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+disabled = true
+text = "↑ Up"
+tooltip_text = "Parent folder (Alt+Up)"
+
+[node name="NavSep1" type="VSeparator" parent="VBox/NavBar/NavHBox"]
+layout_mode = 2
+
+[node name="AddrArea" type="Control" parent="VBox/NavBar/NavHBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+clip_contents = true
+
+[node name="CrumbScroll" type="ScrollContainer" parent="VBox/NavBar/NavHBox/AddrArea"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+vertical_scroll_mode = 0
+horizontal_scroll_mode = 1
+
+[node name="BreadcrumbBar" type="HBoxContainer" parent="VBox/NavBar/NavHBox/AddrArea/CrumbScroll"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="PathEdit" type="LineEdit" parent="VBox/NavBar/NavHBox/AddrArea"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+visible = false
+placeholder_text = "Type a folder path…"
+
+[node name="NavSep2" type="VSeparator" parent="VBox/NavBar/NavHBox"]
+layout_mode = 2
+
+[node name="ZoomOutBtn" type="Button" parent="VBox/NavBar/NavHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+custom_minimum_size = Vector2(32, 0)
+focus_mode = 0
+text = "−"
+tooltip_text = "Zoom out (Ctrl+Scroll)"
+
+[node name="ZoomSlider" type="HSlider" parent="VBox/NavBar/NavHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+custom_minimum_size = Vector2(110, 0)
+size_flags_vertical = 4
+focus_mode = 0
+tooltip_text = "Thumbnail zoom (Ctrl+Scroll)"
+min_value = 0.5
+max_value = 2.5
+step = 0.25
+value = 1.0
+
+[node name="ZoomInBtn" type="Button" parent="VBox/NavBar/NavHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+custom_minimum_size = Vector2(32, 0)
+focus_mode = 0
+text = "+"
+tooltip_text = "Zoom in (Ctrl+Scroll)"
+
+[node name="ZoomPctLbl" type="Label" parent="VBox/NavBar/NavHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+custom_minimum_size = Vector2(44, 0)
+horizontal_alignment = 1
+vertical_alignment = 1
+text = "100%"
+
+[node name="NavRightPad" type="Control" parent="VBox/NavBar/NavHBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(4, 0)
+
+[node name="Separator" type="HSeparator" parent="VBox"]
+layout_mode = 2
+
+[node name="Scroll" type="ScrollContainer" parent="VBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="Pad" type="MarginContainer" parent="VBox/Scroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_top = 12
+theme_override_constants/margin_bottom = 12
+
+[node name="Grid" type="GridContainer" parent="VBox/Scroll/Pad"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/h_separation = 10
+theme_override_constants/v_separation = 10
+
+[node name="StatusLabel" type="Label" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+offset_top = 108.0
+mouse_filter = 2
+horizontal_alignment = 1
+vertical_alignment = 1
+autowrap_mode = 3
