@@ -324,6 +324,20 @@ theme_override_styles/disabled = SubResource("StyleBoxEmpty_transp")
 theme_override_styles/focus = SubResource("StyleBoxEmpty_transp")
 text = "✂ Trim"
 
+[node name="Sep6" type="VSeparator" parent="UI/TopBar/HBox" unique_id=300000002]
+layout_mode = 2
+
+[node name="FullscreenBtn" type="Button" parent="UI/TopBar/HBox" unique_id=300000003]
+layout_mode = 2
+tooltip_text = "Toggle fullscreen (F11)"
+theme_override_styles/normal = SubResource("StyleBoxEmpty_transp")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_pressed")
+theme_override_styles/hover = SubResource("StyleBoxFlat_hover")
+theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_pressed")
+theme_override_styles/disabled = SubResource("StyleBoxEmpty_transp")
+theme_override_styles/focus = SubResource("StyleBoxEmpty_transp")
+text = "⛶"
+
 [node name="PadR" type="Control" parent="UI/TopBar/HBox" unique_id=1350404084]
 custom_minimum_size = Vector2(6, 0)
 layout_mode = 2
@@ -497,6 +511,29 @@ layout_mode = 2
 text = "0:00 / 0:00"
 vertical_alignment = 1
 
+[node name="VolSep" type="VSeparator" parent="UI/BotContainer/BottomBar/HBox/VidBar" unique_id=300000004]
+layout_mode = 2
+
+[node name="MuteBtn" type="Button" parent="UI/BotContainer/BottomBar/HBox/VidBar" unique_id=300000005]
+custom_minimum_size = Vector2(36, 0)
+layout_mode = 2
+tooltip_text = "Mute / Unmute (M)"
+theme_override_styles/normal = SubResource("StyleBoxEmpty_transp")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_pressed")
+theme_override_styles/hover = SubResource("StyleBoxFlat_hover")
+theme_override_styles/hover_pressed = SubResource("StyleBoxFlat_pressed")
+theme_override_styles/disabled = SubResource("StyleBoxEmpty_transp")
+theme_override_styles/focus = SubResource("StyleBoxEmpty_transp")
+text = "🔊"
+
+[node name="VolumeSlider" type="HSlider" parent="UI/BotContainer/BottomBar/HBox/VidBar" unique_id=300000006]
+custom_minimum_size = Vector2(80, 0)
+layout_mode = 2
+size_flags_vertical = 4
+max_value = 1.0
+step = 0.01
+value = 1.0
+
 [node name="PadR" type="Control" parent="UI/BotContainer/BottomBar/HBox" unique_id=244073354]
 custom_minimum_size = Vector2(6, 0)
 layout_mode = 2
@@ -577,3 +614,6 @@ one_shot = true
 [connection signal="value_changed" from="UI/BotContainer/BottomBar/HBox/VidBar/SeekContainer/SeekBar" to="." method="_on_seek_bar_value_changed"]
 [connection signal="timeout" from="TopHideTimer" to="." method="_hide_top_bar"]
 [connection signal="timeout" from="BotHideTimer" to="." method="_hide_bot_bar"]
+[connection signal="pressed" from="UI/TopBar/HBox/FullscreenBtn" to="." method="_toggle_fullscreen"]
+[connection signal="pressed" from="UI/BotContainer/BottomBar/HBox/VidBar/MuteBtn" to="." method="_on_mute_pressed"]
+[connection signal="value_changed" from="UI/BotContainer/BottomBar/HBox/VidBar/VolumeSlider" to="." method="_on_volume_changed"]
