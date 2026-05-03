@@ -61,6 +61,9 @@ var _crop_drag             := ""
 var _crop_drag_start_rect  := Rect2()
 var _crop_drag_start_mouse := Vector2.ZERO
 
+# Image load generation — incremented on each new load to cancel stale ones
+var _load_gen := 0
+
 # Trim state
 var _trim_mode  := false
 var _trim_in         := 0.0
@@ -182,12 +185,31 @@ func _load_current() -> void:
 
 func _load_image(path: String) -> void:
 	_img_rect.visible   = true
+	_img_rect.texture   = null
 	_vid_player.visible = false
 
-	var img := Image.load_from_file(path)
+	_load_gen += 1
+	var gen := _load_gen
+	var state := {"img": null, "done": false}
+
+	WorkerThreadPool.add_task(func() -> void:
+		state["img"] = Image.load_from_file(path)
+		state["done"] = true
+	)
+
+	while not state["done"]:
+		if not is_inside_tree():
+			return
+		await get_tree().process_frame
+
+	if gen != _load_gen:
+		return
+
+	var img := state["img"] as Image
 	if img:
 		_img_size = Vector2(img.get_width(), img.get_height())
 		_img_rect.texture = ImageTexture.create_from_image(img)
+		_reset_transform.call_deferred()
 	else:
 		_error_label.text = "Could not load: " + path.get_file()
 		_error_label.visible = true
