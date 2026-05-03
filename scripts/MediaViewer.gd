@@ -7,10 +7,12 @@
 ##   S / ↓            → zoom out
 ##   Scroll wheel → zoom
 ##   0            → actual size (1:1 pixels)
-##   F            → fit to screen
+##   F            → fit to screen  (press again to fill / cover)
 ##   Q            → rotate 90° counter-clockwise
 ##   E  or  R     → rotate 90° clockwise
 ##   Space        → play / pause video
+##   F11          → toggle fullscreen
+##   M            → mute / unmute video
 ##   C            → crop image (Enter to apply, Esc to cancel)
 ##   T            → trim video (Enter to apply, Esc to cancel)
 ##
@@ -61,9 +63,10 @@ var _crop_drag_start_mouse := Vector2.ZERO
 
 # Trim state
 var _trim_mode  := false
-var _trim_in    := 0.0
-var _trim_out   := 1.0
-var _trim_drag  := ""
+var _trim_in         := 0.0
+var _trim_out        := 1.0
+var _trim_drag       := ""
+var _vol_before_mute := 1.0
 
 @onready var _anchor         : Control           = $Clip/Anchor
 @onready var _img_rect       : TextureRect       = $Clip/Anchor/ImgRect
@@ -93,9 +96,12 @@ var _trim_drag  := ""
 @onready var _crop_btn       : Button            = $UI/TopBar/HBox/CropBtn
 @onready var _trim_bar       : Control           = $UI/BotContainer/TrimBar
 @onready var _trim_range_lbl : Label             = $UI/BotContainer/TrimBar/HBox/TrimRangeLbl
-@onready var _trim_btn       : Button            = $UI/TopBar/HBox/TrimBtn
-@onready var _trim_in_handle : Control           = $UI/BotContainer/BottomBar/HBox/VidBar/SeekContainer/TrimInHandle
-@onready var _trim_out_handle: Control           = $UI/BotContainer/BottomBar/HBox/VidBar/SeekContainer/TrimOutHandle
+@onready var _trim_btn        : Button  = $UI/TopBar/HBox/TrimBtn
+@onready var _trim_in_handle  : Control = $UI/BotContainer/BottomBar/HBox/VidBar/SeekContainer/TrimInHandle
+@onready var _trim_out_handle : Control = $UI/BotContainer/BottomBar/HBox/VidBar/SeekContainer/TrimOutHandle
+@onready var _fullscreen_btn  : Button  = $UI/TopBar/HBox/FullscreenBtn
+@onready var _mute_btn        : Button  = $UI/BotContainer/BottomBar/HBox/VidBar/MuteBtn
+@onready var _vol_slider      : HSlider = $UI/BotContainer/BottomBar/HBox/VidBar/VolumeSlider
 
 
 # ──────────────────────────── Setup ────────────────────────────────
@@ -103,6 +109,9 @@ var _trim_drag  := ""
 func _ready() -> void:
 	_top_hide_timer.wait_time = OVERLAY_HIDE_DELAY
 	_bot_hide_timer.wait_time = OVERLAY_HIDE_DELAY
+	var init_mode := DisplayServer.window_get_mode()
+	_fullscreen_btn.text = "⊡" if (init_mode == DisplayServer.WINDOW_MODE_FULLSCREEN \
+		or init_mode == DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN) else "⛶"
 
 	# Lambda connections that can't be wired in the scene file
 	_file_lbl.pressed.connect(_toggle_info_panel)
@@ -226,28 +235,46 @@ func _on_video_finished() -> void:
 # ──────────────────────────── Transform ────────────────────────────
 
 func _reset_transform() -> void:
-	_zoom    = 1.0
+	_zoom    = _fit_zoom()
 	_rot_deg = 0.0
 	_pan     = Vector2.ZERO
 	_apply_transform()
 
 
 func _do_fit() -> void:
-	_zoom    = 1.0
+	_zoom    = _fit_zoom()
+	_rot_deg = snappedf(_rot_deg, 90.0)
+	_pan     = Vector2.ZERO
+	_apply_transform()
+
+
+func _do_fill() -> void:
+	_zoom    = _fill_zoom()
 	_rot_deg = snappedf(_rot_deg, 90.0)
 	_pan     = Vector2.ZERO
 	_apply_transform()
 
 
 func _do_actual_size() -> void:
-	_pan = Vector2.ZERO
-	if _img_size.x > 0.0 and _img_size.y > 0.0:
-		# zoom level where 1 content pixel == 1 screen pixel
-		var vp := size
-		_zoom = max(_img_size.x / vp.x, _img_size.y / vp.y)
-	else:
-		_zoom = 1.0
+	_pan  = Vector2.ZERO
+	_zoom = 1.0
 	_apply_transform()
+
+
+func _actual_scale() -> float:
+	if _img_size.x > 0.0 and _img_size.y > 0.0:
+		return max(_img_size.x / size.x, _img_size.y / size.y)
+	return 1.0
+
+
+func _fit_zoom() -> float:
+	return 1.0 / _actual_scale()
+
+
+func _fill_zoom() -> float:
+	if _img_size.x > 0.0 and _img_size.y > 0.0:
+		return max(size.x / _img_size.x, size.y / _img_size.y)
+	return 1.0
 
 
 func _rotate_by(deg: float) -> void:
@@ -274,7 +301,8 @@ func _apply_transform() -> void:
 	_anchor.size         = vp
 	_anchor.pivot_offset = vp * 0.5
 	_anchor.position     = _pan
-	_anchor.scale        = Vector2(_zoom, _zoom)
+	var s := _zoom * _actual_scale()
+	_anchor.scale        = Vector2(s, s)
 	_anchor.rotation_degrees = _rot_deg
 
 	_img_rect.size   = vp
@@ -333,22 +361,22 @@ func _on_seek_drag_ended(changed: bool) -> void:
 	_seeking = false
 	if not changed or not _is_video or _vid_player.stream == null:
 		return
-	var len := _vid_player.get_stream_length()
-	if len > 0.0:
-		_vid_player.stream_position = _seek_bar.value * len
+	var len_ := _vid_player.get_stream_length()
+	if len_ > 0.0:
+		_vid_player.stream_position = _seek_bar.value * len_
 
 
 func _on_seek_bar_value_changed(value: float) -> void:
 	if _vid_player.stream == null:
 		return
-	var len := _vid_player.get_stream_length()
-	if len <= 0.0:
+	var len_ := _vid_player.get_stream_length()
+	if len_ <= 0.0:
 		return
 	if _trim_mode:
-		_vid_player.stream_position = value * len
-		_time_lbl.text = "%s / %s" % [_fmt_time(value * len), _fmt_time(len)]
+		_vid_player.stream_position = value * len_
+		_time_lbl.text = "%s / %s" % [_fmt_time(value * len_), _fmt_time(len_)]
 	elif _seeking:
-		_time_lbl.text = "%s / %s" % [_fmt_time(value * len), _fmt_time(len)]
+		_time_lbl.text = "%s / %s" % [_fmt_time(value * len_), _fmt_time(len_)]
 
 
 func _process(_dt: float) -> void:
@@ -356,11 +384,11 @@ func _process(_dt: float) -> void:
 		return
 	if _seeking:
 		return
-	var len := _vid_player.get_stream_length()
-	if len > 0.0:
+	var len_ := _vid_player.get_stream_length()
+	if len_ > 0.0:
 		var pos := _vid_player.stream_position
-		_seek_bar.set_value_no_signal(pos / len)
-		_time_lbl.text = "%s / %s" % [_fmt_time(pos), _fmt_time(len)]
+		_seek_bar.set_value_no_signal(pos / len_)
+		_time_lbl.text = "%s / %s" % [_fmt_time(pos), _fmt_time(len_)]
 
 	if _trim_mode and _seek_container.size.x > 0.0:
 		_update_trim_handles()
@@ -545,7 +573,10 @@ func _handle_key(ev: InputEventKey) -> void:
 				_do_actual_size()
 		KEY_F:
 			if not _crop_mode:
-				_do_fit()
+				if absf(_zoom - _fit_zoom()) < 0.01:
+					_do_fill()
+				else:
+					_do_fit()
 		KEY_Q:
 			if not _crop_mode:
 				_rotate_by(-90.0)
@@ -557,6 +588,11 @@ func _handle_key(ev: InputEventKey) -> void:
 					_rotate_by(90.0)
 		KEY_SPACE:
 			_toggle_play()
+		KEY_F11:
+			_toggle_fullscreen()
+		KEY_M:
+			if _is_video:
+				_on_mute_pressed()
 
 
 func _handle_mouse_button(ev: InputEventMouseButton) -> void:
@@ -568,7 +604,7 @@ func _handle_mouse_button(ev: InputEventMouseButton) -> void:
 				_drag_pan_start    = _pan
 			elif ev.double_click:
 				# Double-click: toggle between fit and 2× zoom
-				if absf(_zoom - 1.0) < 0.05:
+				if absf(_zoom - _fit_zoom()) < 0.05 * _fit_zoom():
 					_zoom_at(2.0 / _zoom, ev.position)
 				else:
 					_do_fit()
@@ -891,13 +927,13 @@ func _on_trim_cancel() -> void:
 
 func _on_trim_apply() -> void:
 	var path := _files[_idx]
-	var len  := _vid_player.get_stream_length()
-	if len <= 0.0:
+	var len_ := _vid_player.get_stream_length()
+	if len_ <= 0.0:
 		_on_trim_cancel()
 		return
 
-	var t_in  := _trim_in  * len
-	var t_out := _trim_out * len
+	var t_in  := _trim_in  * len_
+	var t_out := _trim_out * len_
 	var out_path := _make_trim_save_path(path)
 
 	var ffmpeg_bin := _find_ffmpeg()
@@ -985,12 +1021,12 @@ func _on_trim_handle_input(event: InputEvent, which: String) -> void:
 
 
 func _update_trim_label() -> void:
-	var len := _vid_player.get_stream_length()
-	if len <= 0.0:
+	var len_ := _vid_player.get_stream_length()
+	if len_ <= 0.0:
 		_trim_range_lbl.text = "Set in/out points"
 		return
-	var t_in  := _trim_in  * len
-	var t_out := _trim_out * len
+	var t_in  := _trim_in  * len_
+	var t_out := _trim_out * len_
 	var dur   := t_out - t_in
 	_trim_range_lbl.text = "%s → %s  (%s)" % [_fmt_time(t_in), _fmt_time(t_out), _fmt_time(dur)]
 
@@ -1013,6 +1049,37 @@ func _make_trim_save_path(path: String) -> String:
 		candidate = dir.path_join("%s_trim%d.%s" % [stem, n, ext])
 		n += 1
 	return candidate
+
+
+# ──────────────────────────── Fullscreen & Volume ──────────────────
+
+func _toggle_fullscreen() -> void:
+	var mode := DisplayServer.window_get_mode()
+	var is_fs := mode == DisplayServer.WINDOW_MODE_FULLSCREEN \
+			  or mode == DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN
+	if is_fs:
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+		_fullscreen_btn.text = "⛶"
+	else:
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+		_fullscreen_btn.text = "⊡"
+
+
+func _on_mute_pressed() -> void:
+	if _vid_player.volume_db > -60.0:
+		_vol_before_mute = db_to_linear(_vid_player.volume_db)
+		_vid_player.volume_db = -80.0
+		_vol_slider.set_value_no_signal(0.0)
+		_mute_btn.text = "🔇"
+	else:
+		_vid_player.volume_db = linear_to_db(_vol_before_mute)
+		_vol_slider.set_value_no_signal(_vol_before_mute)
+		_mute_btn.text = "🔊"
+
+
+func _on_volume_changed(value: float) -> void:
+	_vid_player.volume_db = linear_to_db(value) if value > 0.0 else -80.0
+	_mute_btn.text = "🔇" if value <= 0.0 else "🔊"
 
 
 # ──────────────────────────── Info panel ───────────────────────────

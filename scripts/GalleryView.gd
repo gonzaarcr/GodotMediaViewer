@@ -8,11 +8,13 @@ const VIDEO_EXT := ["mp4", "webm", "ogv", "avi", "mkv", "mov"]
 const THUMB_W   := 168
 const THUMB_H   := 148
 const THUMB_IMG := 128
+const MAX_THUMB_TASKS := 8
 const ZOOM_MIN   := 0.5
 const ZOOM_MAX   := 2.5
 const ZOOM_STEP  := 0.25
 const PREFS_PATH := "user://prefs.cfg"
 
+var _loading_count := 0
 var _zoom: float = 1.0
 var _selected_index: int = -1
 
@@ -366,12 +368,32 @@ func _make_file_thumb(index: int) -> Control:
 		lbl.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		placeholder.add_child(lbl)
 	else:
+		var wrapper := Control.new()
+		wrapper.custom_minimum_size = Vector2(tw - 8, ti)
+		wrapper.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		vbox.add_child(wrapper)
+
+		var placeholder := ColorRect.new()
+		placeholder.color = Color("#1a1a1a")
+		placeholder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		placeholder.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		wrapper.add_child(placeholder)
+
+		var loading_lbl := Label.new()
+		loading_lbl.text = "..."
+		loading_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		loading_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		loading_lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+		loading_lbl.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		placeholder.add_child(loading_lbl)
+
 		var tex_rect := TextureRect.new()
-		tex_rect.custom_minimum_size = Vector2(tw - 8, ti)
-		tex_rect.expand_mode   = TextureRect.EXPAND_IGNORE_SIZE
-		tex_rect.stretch_mode  = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		vbox.add_child(tex_rect)
-		_load_thumb_deferred.call_deferred(path, tex_rect, tw, ti)
+		tex_rect.expand_mode  = TextureRect.EXPAND_IGNORE_SIZE
+		tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		tex_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		tex_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		wrapper.add_child(tex_rect)
+		_load_thumb_deferred(path, tex_rect, placeholder, tw, ti)
 
 	var name_lbl := Label.new()
 	name_lbl.text = path.get_file()
@@ -384,12 +406,41 @@ func _make_file_thumb(index: int) -> Control:
 	return btn
 
 
-func _load_thumb_deferred(path: String, tex_rect: TextureRect, w: int, h: int) -> void:
+func _load_thumb_deferred(path: String, tex_rect: TextureRect, placeholder: ColorRect, w: int, h: int) -> void:
 	if not is_instance_valid(tex_rect):
 		return
-	var img := Image.load_from_file(path)
+
+	while _loading_count >= MAX_THUMB_TASKS:
+		if not is_inside_tree():
+			return
+		await get_tree().process_frame
+
+	if not is_instance_valid(tex_rect):
+		return
+
+	_loading_count += 1
+	var state := {"img": null, "done": false}
+
+	WorkerThreadPool.add_task(func() -> void:
+		var loaded := Image.load_from_file(path)
+		if loaded:
+			loaded.resize(w, h, Image.INTERPOLATE_BILINEAR)
+			state["img"] = loaded
+		state["done"] = true
+	)
+
+	while not state["done"]:
+		if not is_inside_tree():
+			_loading_count -= 1
+			return
+		await get_tree().process_frame
+
+	_loading_count -= 1
+
+	if is_instance_valid(placeholder):
+		placeholder.hide()
+	var img := state["img"] as Image
 	if img and is_instance_valid(tex_rect):
-		img.resize(w, h, Image.INTERPOLATE_BILINEAR)
 		tex_rect.texture = ImageTexture.create_from_image(img)
 
 
