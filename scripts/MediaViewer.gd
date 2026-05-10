@@ -5,6 +5,7 @@
 ##   ← / →  or  A / D   → prev / next file
 ##   + / - or W / ↑  → zoom in / out  (also Ctrl+scroll)
 ##   S / ↓            → zoom out
+##   Ctrl + ← ↑ → ↓   → pan in that direction
 ##   Scroll wheel → zoom
 ##   0            → actual size (1:1 pixels)
 ##   F            → fit to screen  (press again to fill / cover)
@@ -34,6 +35,7 @@ const VIDEO_EXT  := ["mp4", "webm", "ogv", "avi", "mkv", "mov"]
 const ZOOM_MIN          := 0.05
 const ZOOM_MAX          := 32.0
 const ZOOM_STEP         := 0.12   # fractional factor per scroll tick
+const KEY_PAN_STEP      := 60.0   # pixels per Ctrl+arrow press
 const OVERLAY_HIDE_DELAY := 3.0   # seconds of idle before hiding
 const CROP_HANDLE_SIZE  := 16
 const CROP_MIN_SIZE     := 20
@@ -307,6 +309,11 @@ func _fill_zoom() -> float:
 
 func _rotate_by(deg: float) -> void:
 	_rot_deg = snappedf(_rot_deg + deg, 90.0)
+	_apply_transform()
+
+
+func _pan_by(delta: Vector2) -> void:
+	_pan += delta
 	_apply_transform()
 
 
@@ -584,16 +591,36 @@ func _handle_key(ev: InputEventKey) -> void:
 					_on_trim_apply()
 				else:
 					_enter_trim_mode()
-		KEY_LEFT, KEY_A:
+		KEY_LEFT:
+			if ev.ctrl_pressed:
+				_pan_by(Vector2(KEY_PAN_STEP, 0.0))
+			elif not _crop_mode and not _trim_mode:
+				_go_prev()
+		KEY_RIGHT:
+			if ev.ctrl_pressed:
+				_pan_by(Vector2(-KEY_PAN_STEP, 0.0))
+			elif not _crop_mode and not _trim_mode:
+				_go_next()
+		KEY_UP:
+			if ev.ctrl_pressed:
+				_pan_by(Vector2(0.0, KEY_PAN_STEP))
+			elif not _crop_mode:
+				_zoom_at(1.0 + ZOOM_STEP * 2, size * 0.5)
+		KEY_DOWN:
+			if ev.ctrl_pressed:
+				_pan_by(Vector2(0.0, -KEY_PAN_STEP))
+			elif not _crop_mode:
+				_zoom_at(1.0 - ZOOM_STEP * 2, size * 0.5)
+		KEY_A:
 			if not _crop_mode and not _trim_mode:
 				_go_prev()
-		KEY_RIGHT, KEY_D:
+		KEY_D:
 			if not _crop_mode and not _trim_mode:
 				_go_next()
-		KEY_EQUAL, KEY_PLUS, KEY_KP_ADD, KEY_W, KEY_UP:
+		KEY_EQUAL, KEY_PLUS, KEY_KP_ADD, KEY_W:
 			if not _crop_mode:
 				_zoom_at(1.0 + ZOOM_STEP * 2, size * 0.5)
-		KEY_MINUS, KEY_KP_SUBTRACT, KEY_S, KEY_DOWN:
+		KEY_MINUS, KEY_KP_SUBTRACT, KEY_S:
 			if not _crop_mode:
 				_zoom_at(1.0 - ZOOM_STEP * 2, size * 0.5)
 		KEY_0, KEY_KP_0:
