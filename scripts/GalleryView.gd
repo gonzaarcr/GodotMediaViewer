@@ -9,14 +9,20 @@ const THUMB_W   := 168
 const THUMB_H   := 148
 const THUMB_IMG := 128
 const MAX_THUMB_TASKS := 8
+const GRID_CHUNK := 50
+const THUMB_CACHE_MAX := 1024
 const ZOOM_MIN   := 0.5
 const ZOOM_MAX   := 2.5
 const ZOOM_STEP  := 0.25
 const PREFS_PATH := "user://prefs.cfg"
 
 var _loading_count := 0
+var _nav_gen: int = 0
 var _zoom: float = 1.0
 var _selected_index: int = -1
+
+var _thumb_cache: Dictionary = {}             # key: "path|mtime|w|h" → ImageTexture
+var _thumb_cache_order: Array[String] = []    # LRU queue, oldest first
 
 var _current_folder: String = ""
 var _files: Array[String] = []       # media files in current folder
@@ -269,6 +275,9 @@ func _do_tab_complete() -> void:
 # ──────────────────────────── Grid ─────────────────────────────────
 
 func _refresh_grid() -> void:
+	_nav_gen += 1
+	var gen := _nav_gen
+
 	for c in _grid.get_children():
 		c.queue_free()
 
@@ -280,18 +289,28 @@ func _refresh_grid() -> void:
 	_status_label.visible = false
 	_selected_index = -1
 
+	var added := 0
 	for path in _subfolders:
-		var item := _make_folder_item(path)
-		_grid.add_child(item)
-		var idx := _grid.get_child_count() - 1
-		item.focus_entered.connect(func() -> void: _selected_index = idx)
+		if gen != _nav_gen: return
+		_add_grid_item(_make_folder_item(path))
+		added += 1
+		if added % GRID_CHUNK == 0:
+			await get_tree().process_frame
 	for i in _files.size():
-		var item := _make_file_thumb(i)
-		_grid.add_child(item)
-		var idx := _grid.get_child_count() - 1
-		item.focus_entered.connect(func() -> void: _selected_index = idx)
+		if gen != _nav_gen: return
+		_add_grid_item(_make_file_thumb(i))
+		added += 1
+		if added % GRID_CHUNK == 0:
+			await get_tree().process_frame
 
+	if gen != _nav_gen: return
 	_update_columns()
+
+
+func _add_grid_item(item: Control) -> void:
+	_grid.add_child(item)
+	var idx := _grid.get_child_count() - 1
+	item.focus_entered.connect(func() -> void: _selected_index = idx)
 
 
 func _make_folder_item(path: String) -> Control:
@@ -380,8 +399,10 @@ func _make_file_thumb(index: int) -> Control:
 		wrapper.add_child(placeholder)
 
 		var loading_lbl := Label.new()
-		loading_lbl.text = "..."
+		loading_lbl.text = "⏳"
 		loading_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		loading_lbl.add_theme_font_size_override("font_size", int(36 * _zoom))
+		loading_lbl.modulate = Color(1, 1, 1, 0.5)
 		loading_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		loading_lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
 		loading_lbl.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -409,9 +430,23 @@ func _make_file_thumb(index: int) -> Control:
 func _load_thumb_deferred(path: String, tex_rect: TextureRect, placeholder: ColorRect, w: int, h: int) -> void:
 	if not is_instance_valid(tex_rect):
 		return
+	var gen := _nav_gen
+
+	# Cache hit: paint immediately, no hourglass flash, no worker task.
+	var key := "%s|%d|%d|%d" % [path, FileAccess.get_modified_time(path), w, h]
+	if _thumb_cache.has(key):
+		if is_instance_valid(placeholder): placeholder.hide()
+		if is_instance_valid(tex_rect): tex_rect.texture = _thumb_cache[key]
+		_touch_cache(key)
+		return
+
+	# Yield once so the grid + placeholders paint before any thumb work begins.
+	await get_tree().process_frame
+	if gen != _nav_gen or not is_instance_valid(tex_rect):
+		return
 
 	while _loading_count >= MAX_THUMB_TASKS:
-		if not is_inside_tree():
+		if gen != _nav_gen or not is_inside_tree():
 			return
 		await get_tree().process_frame
 
@@ -424,24 +459,44 @@ func _load_thumb_deferred(path: String, tex_rect: TextureRect, placeholder: Colo
 	WorkerThreadPool.add_task(func() -> void:
 		var loaded := Image.load_from_file(path)
 		if loaded:
-			loaded.resize(w, h, Image.INTERPOLATE_BILINEAR)
+			var sw := loaded.get_width()
+			var sh := loaded.get_height()
+			if sw > 0 and sh > 0:
+				var scale := minf(float(w) / sw, float(h) / sh)
+				if scale < 1.0:
+					loaded.resize(int(sw * scale), int(sh * scale), Image.INTERPOLATE_BILINEAR)
 			state["img"] = loaded
 		state["done"] = true
 	)
 
 	while not state["done"]:
-		if not is_inside_tree():
+		if gen != _nav_gen or not is_inside_tree():
 			_loading_count -= 1
 			return
 		await get_tree().process_frame
 
 	_loading_count -= 1
+	if gen != _nav_gen:
+		return
 
+	var img := state["img"] as Image
+	if not img:
+		return
+	var tex := ImageTexture.create_from_image(img)
+	_thumb_cache[key] = tex
+	_touch_cache(key)
 	if is_instance_valid(placeholder):
 		placeholder.hide()
-	var img := state["img"] as Image
-	if img and is_instance_valid(tex_rect):
-		tex_rect.texture = ImageTexture.create_from_image(img)
+	if is_instance_valid(tex_rect):
+		tex_rect.texture = tex
+
+
+func _touch_cache(key: String) -> void:
+	_thumb_cache_order.erase(key)
+	_thumb_cache_order.append(key)
+	while _thumb_cache_order.size() > THUMB_CACHE_MAX:
+		var evict: String = _thumb_cache_order.pop_front()
+		_thumb_cache.erase(evict)
 
 
 # ──────────────────────────── Zoom ─────────────────────────────────
@@ -515,12 +570,11 @@ func _make_file_cmp() -> Callable:
 		SortMode.MODIFIED:
 			return func(a, b): return FileAccess.get_modified_time(a) < FileAccess.get_modified_time(b)
 		SortMode.SIZE:
-			return func(a, b):
-				var fa := FileAccess.open(a, FileAccess.READ)
-				var fb := FileAccess.open(b, FileAccess.READ)
-				var sa := fa.get_length() if fa else 0
-				var sb := fb.get_length() if fb else 0
-				return sa < sb
+			var sizes := {}
+			for p in _files:
+				var f := FileAccess.open(p, FileAccess.READ)
+				sizes[p] = f.get_length() if f else 0
+			return func(a, b): return sizes[a] < sizes[b]
 		SortMode.TYPE:
 			return func(a, b):
 				var ea: String = a.get_extension().to_lower()
@@ -599,9 +653,15 @@ func _unhandled_input(event: InputEvent) -> void:
 # ──────────────────────────── Drag-and-drop ────────────────────────
 
 func _on_files_dropped(paths: PackedStringArray) -> void:
+	# Directory-wins: if any dropped path is a directory, navigate to the
+	# first such directory and ignore everything else.
+	for path in paths:
+		if not FileAccess.file_exists(path) and DirAccess.dir_exists_absolute(path):
+			_navigate_to(path)
+			return
+
 	var collected: Array[String] = []
 	var first_folder := ""
-
 	for path in paths:
 		if FileAccess.file_exists(path):
 			var ext := path.get_extension().to_lower()
@@ -609,10 +669,6 @@ func _on_files_dropped(paths: PackedStringArray) -> void:
 				collected.append(path)
 				if first_folder == "":
 					first_folder = path.get_base_dir()
-		else:
-			# Treat as directory
-			_navigate_to(path)
-			return   # navigate_to handles everything; done
 
 	if collected.is_empty():
 		return
@@ -627,12 +683,7 @@ func _on_files_dropped(paths: PackedStringArray) -> void:
 		# Mixed sources – just display the dropped files directly.
 		_files = collected
 		_subfolders.clear()
-		_status_label.visible = false
-		for c in _grid.get_children():
-			c.queue_free()
-		for i in _files.size():
-			_grid.add_child(_make_file_thumb(i))
-		_update_columns()
+		_refresh_grid()
 
 
 # ──────────────────────────── Layout ───────────────────────────────
