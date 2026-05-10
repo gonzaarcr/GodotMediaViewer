@@ -9,7 +9,6 @@ const THUMB_W   := 168
 const THUMB_H   := 148
 const THUMB_IMG := 128
 const MAX_THUMB_TASKS := 8
-const GRID_CHUNK := 50
 const THUMB_CACHE_MAX := 1024
 const ZOOM_MIN   := 0.5
 const ZOOM_MAX   := 2.5
@@ -19,7 +18,6 @@ const PREFS_PATH := "user://prefs.cfg"
 var _loading_count := 0
 var _nav_gen: int = 0
 var _zoom: float = 1.0
-var _selected_index: int = -1
 
 var _thumb_cache: Dictionary = {}             # key: "path|mtime|w|h" → ImageTexture
 var _thumb_cache_order: Array[String] = []    # LRU queue, oldest first
@@ -34,7 +32,7 @@ enum SortMode { NAME, MODIFIED, SIZE, TYPE }
 var _sort_mode: SortMode = SortMode.NAME
 var _sort_asc: bool = true
 
-@onready var _grid: GridContainer = %Grid
+@onready var _grid: VirtualGrid = %Grid
 @onready var _status_label: Label = %StatusLabel
 @onready var _breadcrumb_bar: HBoxContainer = %BreadcrumbBar
 @onready var _crumb_scroll: ScrollContainer = %CrumbScroll
@@ -69,8 +67,18 @@ func _ready() -> void:
 	if win:
 		win.files_dropped.connect(_on_files_dropped)
 
-	_update_columns()
+	# Load prefs first so _zoom reflects on-disk state before we hand the
+	# resolved item dimensions to the grid.
 	_load_prefs()
+
+	_grid.item_width = _tw()
+	_grid.item_height = _th()
+	_grid.configure(
+		func() -> int: return _subfolders.size() + _files.size(),
+		func(idx: int) -> Control:
+			return _make_folder_item(_subfolders[idx]) if idx < _subfolders.size() \
+				else _make_file_thumb(idx - _subfolders.size())
+	)
 
 	# Open Downloads by default; fall back to home directory.
 	var dl := OS.get_system_dir(OS.SYSTEM_DIR_DOWNLOADS)
@@ -274,43 +282,17 @@ func _do_tab_complete() -> void:
 
 # ──────────────────────────── Grid ─────────────────────────────────
 
+# Full reset: invalidate in-flight thumbs and rebuild from scratch scrolled to
+# the top. Used on navigate / sort / drag-drop.
 func _refresh_grid() -> void:
 	_nav_gen += 1
-	var gen := _nav_gen
-
-	for c in _grid.get_children():
-		c.queue_free()
-
 	if _subfolders.is_empty() and _files.is_empty():
 		_status_label.text = "This folder contains no media files or subfolders."
 		_status_label.visible = true
+		_grid.reload()
 		return
-
 	_status_label.visible = false
-	_selected_index = -1
-
-	var added := 0
-	for path in _subfolders:
-		if gen != _nav_gen: return
-		_add_grid_item(_make_folder_item(path))
-		added += 1
-		if added % GRID_CHUNK == 0:
-			await get_tree().process_frame
-	for i in _files.size():
-		if gen != _nav_gen: return
-		_add_grid_item(_make_file_thumb(i))
-		added += 1
-		if added % GRID_CHUNK == 0:
-			await get_tree().process_frame
-
-	if gen != _nav_gen: return
-	_update_columns()
-
-
-func _add_grid_item(item: Control) -> void:
-	_grid.add_child(item)
-	var idx := _grid.get_child_count() - 1
-	item.focus_entered.connect(func() -> void: _selected_index = idx)
+	_grid.reload()
 
 
 func _make_folder_item(path: String) -> Control:
@@ -515,7 +497,10 @@ func _on_zoom_changed(value: float) -> void:
 		_zoom_slider.set_value_no_signal(_zoom)
 	if is_instance_valid(_zoom_pct_lbl):
 		_zoom_pct_lbl.text = "%d%%" % int(_zoom * 100)
-	_refresh_grid()
+	# Item dimensions changed — invalidate inflight thumb tasks; the grid rebuilds
+	# its existing items at the new size and preserves the user's scroll position.
+	_nav_gen += 1
+	_grid.set_item_size(_tw(), _th())
 	_save_prefs()
 
 
@@ -584,16 +569,6 @@ func _make_file_cmp() -> Callable:
 			return func(a, b): return a.get_file().to_lower() < b.get_file().to_lower()
 
 
-func _select_grid_item(index: int) -> void:
-	var count := _grid.get_child_count()
-	if count == 0:
-		return
-	_selected_index = clampi(index, 0, count - 1)
-	var btn := _grid.get_child(_selected_index) as Button
-	if btn:
-		btn.grab_focus()
-
-
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed:
 		if event.keycode == KEY_F6 or (event.keycode == KEY_L and event.ctrl_pressed):
@@ -614,30 +589,32 @@ func _unhandled_input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 				return
 		if not event.alt_pressed and not event.ctrl_pressed and not event.shift_pressed:
-			var count := _grid.get_child_count()
-			var cur := _selected_index if _selected_index >= 0 else 0
+			var count := _grid.total_count()
+			var cur := _grid.selected_index() if _grid.selected_index() >= 0 else 0
+			var cols := _grid.column_count()
 			match event.keycode:
 				KEY_LEFT:
-					_select_grid_item(cur - 1)
+					_grid.select_index(cur - 1)
 					get_viewport().set_input_as_handled()
 				KEY_RIGHT:
-					_select_grid_item(cur + 1)
+					_grid.select_index(cur + 1)
 					get_viewport().set_input_as_handled()
 				KEY_UP:
-					_select_grid_item(cur - _grid.columns)
+					_grid.select_index(cur - cols)
 					get_viewport().set_input_as_handled()
 				KEY_DOWN:
-					_select_grid_item(cur + _grid.columns)
+					_grid.select_index(cur + cols)
 					get_viewport().set_input_as_handled()
 				KEY_HOME:
-					_select_grid_item(0)
+					_grid.select_index(0)
 					get_viewport().set_input_as_handled()
 				KEY_END:
-					_select_grid_item(count - 1)
+					_grid.select_index(count - 1)
 					get_viewport().set_input_as_handled()
 				KEY_ENTER, KEY_KP_ENTER:
-					if _selected_index >= 0 and count > 0:
-						var btn := _grid.get_child(_selected_index) as Button
+					var sel := _grid.selected_index()
+					if sel >= 0 and count > 0:
+						var btn := _grid.get_visible_item(sel) as Button
 						if btn:
 							btn.pressed.emit()
 					get_viewport().set_input_as_handled()
@@ -684,17 +661,3 @@ func _on_files_dropped(paths: PackedStringArray) -> void:
 		_files = collected
 		_subfolders.clear()
 		_refresh_grid()
-
-
-# ──────────────────────────── Layout ───────────────────────────────
-
-func _notification(what: int) -> void:
-	if what == NOTIFICATION_RESIZED:
-		_update_columns()
-
-
-func _update_columns() -> void:
-	if not is_instance_valid(_grid):
-		return
-	var w := size.x - 56.0
-	_grid.columns = max(1, int(w / (_tw() + 10)))
