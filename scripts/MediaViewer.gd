@@ -1,7 +1,7 @@
 ## Full-screen media viewer with zoom, rotation, pan, and video playback.
 ##
 ## Keyboard shortcuts
-##   Esc          → back to gallery (or cancel crop/trim)
+##   Esc / Backspace → back to gallery (or cancel crop/trim)
 ##   ← / →  or  A / D   → prev / next file
 ##   + / - or W / ↑  → zoom in / out  (also Ctrl+scroll)
 ##   S / ↓            → zoom out
@@ -559,7 +559,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _handle_key(ev: InputEventKey) -> void:
 	match ev.keycode:
-		KEY_ESCAPE:
+		KEY_ESCAPE, KEY_BACKSPACE:
 			if _crop_mode:
 				_on_crop_cancel()
 			elif _trim_mode:
