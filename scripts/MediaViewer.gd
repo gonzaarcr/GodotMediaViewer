@@ -17,8 +17,14 @@
 ##   T            → trim video (Enter to apply, Esc to cancel)
 ##
 ## Touchpad gestures
-##   Pinch        → zoom toward fingers
-##   Two-finger scroll → pan  (also pans when zoomed with regular scroll)
+##   Pinch        → zoom toward fingers (macOS only — Godot does not emit
+##                  pinch events on Linux/X11 or Windows)
+##   Two-finger scroll → pan
+##                  On macOS this comes through as InputEventPanGesture.
+##                  On Linux it arrives as wheel events; we detect the
+##                  touchpad via fractional InputEventMouseButton.factor
+##                  (high-precision scrolling) and pan instead of zoom.
+##                  Ctrl+two-finger scroll → zoom on Linux.
 extends Control
 
 signal back_pressed
@@ -631,15 +637,25 @@ func _handle_mouse_button(ev: InputEventMouseButton) -> void:
 				else:
 					_do_fit()
 
-		MOUSE_BUTTON_WHEEL_UP:
-			# Ctrl held = larger step; plain = normal step
-			var factor := 1.0 + ZOOM_STEP * (2.0 if ev.ctrl_pressed else 1.0)
-			_zoom_at(factor, ev.position)
+		MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN:
+			var dir := 1.0 if ev.button_index == MOUSE_BUTTON_WHEEL_UP else -1.0
+			# Discrete mouse wheel ticks have factor == 1.0; touchpad
+			# high-precision scrolling reports fractional factors. Use that
+			# to route touchpad → pan and mouse wheel → zoom.
+			var is_touchpad := ev.factor > 0.0 and not is_equal_approx(ev.factor, 1.0)
+			if is_touchpad and not ev.ctrl_pressed:
+				_pan.y += 60.0 * dir * ev.factor
+				_apply_transform()
+			else:
+				var step := ev.factor if is_touchpad else (2.0 if ev.ctrl_pressed else 1.0)
+				_zoom_at(1.0 + ZOOM_STEP * dir * step, ev.position)
 			get_viewport().set_input_as_handled()
 
-		MOUSE_BUTTON_WHEEL_DOWN:
-			var factor := 1.0 - ZOOM_STEP * (2.0 if ev.ctrl_pressed else 1.0)
-			_zoom_at(factor, ev.position)
+		MOUSE_BUTTON_WHEEL_LEFT, MOUSE_BUTTON_WHEEL_RIGHT:
+			var dir := 1.0 if ev.button_index == MOUSE_BUTTON_WHEEL_RIGHT else -1.0
+			var f := ev.factor if ev.factor > 0.0 else 1.0
+			_pan.x -= 60.0 * dir * f
+			_apply_transform()
 			get_viewport().set_input_as_handled()
 
 		MOUSE_BUTTON_MIDDLE:
