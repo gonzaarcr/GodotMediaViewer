@@ -22,10 +22,10 @@
 ##                  pinch events on Linux/X11 or Windows)
 ##   Two-finger scroll → pan
 ##                  On macOS this comes through as InputEventPanGesture.
-##                  On Linux it arrives as wheel events; we detect the
-##                  touchpad via fractional InputEventMouseButton.factor
-##                  (high-precision scrolling) and pan instead of zoom.
-##                  Ctrl+two-finger scroll → zoom on Linux.
+##                  On Linux it arrives as wheel events. Godot/X11 cannot
+##                  reliably distinguish touchpad from mouse wheel, so on
+##                  Linux scroll = pan and Ctrl+scroll = zoom for both.
+##                  On macOS/Windows scroll = zoom (mouse wheel convention).
 extends Control
 
 signal back_pressed
@@ -666,12 +666,17 @@ func _handle_mouse_button(ev: InputEventMouseButton) -> void:
 
 		MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN:
 			var dir := 1.0 if ev.button_index == MOUSE_BUTTON_WHEEL_UP else -1.0
-			# Discrete mouse wheel ticks have factor == 1.0; touchpad
-			# high-precision scrolling reports fractional factors. Use that
-			# to route touchpad → pan and mouse wheel → zoom.
+			# Touchpad detection via fractional factor (works on Wayland/macOS
+			# but not reliably on X11). Linux-side fallback: default to pan,
+			# require Ctrl for zoom — matching GIMP/Inkscape/Krita.
 			var is_touchpad := ev.factor > 0.0 and not is_equal_approx(ev.factor, 1.0)
-			if is_touchpad and not ev.ctrl_pressed:
-				_pan.y += 60.0 * dir * ev.factor
+			var is_linux := OS.get_name() == "Linux"
+			var should_pan := (is_touchpad or is_linux) and not ev.ctrl_pressed
+			print("[wheel] os=%s factor=%.3f is_touchpad=%s ctrl=%s pressed=%s should_pan=%s" \
+				% [OS.get_name(), ev.factor, is_touchpad, ev.ctrl_pressed, ev.pressed, should_pan])
+			if should_pan:
+				var f := ev.factor if is_touchpad else 1.0
+				_pan.y += 60.0 * dir * f
 				_apply_transform()
 			else:
 				var step := ev.factor if is_touchpad else (2.0 if ev.ctrl_pressed else 1.0)
