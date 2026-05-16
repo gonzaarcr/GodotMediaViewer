@@ -14,6 +14,7 @@
 ##   Space        → play / pause video
 ##   F11          → toggle fullscreen
 ##   M            → mute / unmute video
+##   I            → toggle info panel
 ##   C            → crop image (Enter to apply, Esc to cancel)
 ##   T            → trim video (Enter to apply, Esc to cancel)
 ##
@@ -648,6 +649,9 @@ func _handle_key(ev: InputEventKey) -> void:
 		KEY_M:
 			if _is_video:
 				_on_mute_pressed()
+		KEY_I:
+			if not _crop_mode and not _trim_mode:
+				_toggle_info_panel()
 
 
 func _handle_mouse_button(ev: InputEventMouseButton) -> void:

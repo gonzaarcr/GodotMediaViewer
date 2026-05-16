@@ -32,7 +32,21 @@ enum SortMode { NAME, MODIFIED, SIZE, TYPE }
 var _sort_mode: SortMode = SortMode.NAME
 var _sort_asc: bool = true
 
+# Stat caches reused by sort comparator and nav-rail landmark generation.
+var _mtime_cache: Dictionary = {}    # path → int (unix mtime)
+var _size_cache: Dictionary = {}     # path → int (bytes)
+
+const MONTH_NAMES := ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+		"Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+const SIZE_BOUNDARIES := [1024, 10240, 102400, 1048576, 10485760,
+		104857600, 1073741824]
+const SIZE_LABELS := ["<1 KB", "1–10 KB", "10–100 KB", "100 KB–1 MB",
+		"1–10 MB", "10–100 MB", "100 MB–1 GB", ">1 GB"]
+const SIZE_MAJOR_BUCKET := [false, false, false, true, false, false, true, true]
+
 @onready var _grid: VirtualGrid = %Grid
+@onready var _scroll: ScrollContainer = %Scroll
+@onready var _nav_rail: ScrollNavRail = %NavRail
 @onready var _status_label: Label = %StatusLabel
 @onready var _breadcrumb_bar: HBoxContainer = %BreadcrumbBar
 @onready var _crumb_scroll: ScrollContainer = %CrumbScroll
@@ -80,6 +94,10 @@ func _ready() -> void:
 				else _make_file_thumb(idx - _subfolders.size())
 	)
 
+	_scroll.get_v_scroll_bar().value_changed.connect(_on_scroll_changed)
+	_grid.resized.connect(_refresh_nav_rail)
+	_nav_rail.seek_requested.connect(_on_nav_seek)
+
 	# Open Downloads by default; fall back to home directory.
 	var dl := OS.get_system_dir(OS.SYSTEM_DIR_DOWNLOADS)
 	if dl != "" and DirAccess.dir_exists_absolute(dl):
@@ -108,6 +126,8 @@ func _navigate_to(folder: String, push_history: bool = true) -> void:
 	_current_folder = folder
 	_files.clear()
 	_subfolders.clear()
+	_mtime_cache.clear()
+	_size_cache.clear()
 
 	var dir := DirAccess.open(folder)
 	if not dir:
@@ -502,6 +522,7 @@ func _on_zoom_changed(value: float) -> void:
 	_nav_gen += 1
 	_grid.set_item_size(_tw(), _th())
 	_save_prefs()
+	call_deferred("_refresh_nav_rail")
 
 
 # ──────────────────────────── Sorting ──────────────────────────────
@@ -548,18 +569,19 @@ func _apply_sort() -> void:
 		_files.reverse()
 		_subfolders.reverse()
 	_refresh_grid()
+	call_deferred("_refresh_nav_rail")
 
 
 func _make_file_cmp() -> Callable:
 	match _sort_mode:
 		SortMode.MODIFIED:
-			return func(a, b): return FileAccess.get_modified_time(a) < FileAccess.get_modified_time(b)
-		SortMode.SIZE:
-			var sizes := {}
 			for p in _files:
-				var f := FileAccess.open(p, FileAccess.READ)
-				sizes[p] = f.get_length() if f else 0
-			return func(a, b): return sizes[a] < sizes[b]
+				_mtime_for(p)
+			return func(a, b): return _mtime_cache[a] < _mtime_cache[b]
+		SortMode.SIZE:
+			for p in _files:
+				_size_for(p)
+			return func(a, b): return _size_cache[a] < _size_cache[b]
 		SortMode.TYPE:
 			return func(a, b):
 				var ea: String = a.get_extension().to_lower()
@@ -571,7 +593,7 @@ func _make_file_cmp() -> Callable:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed:
-		if event.keycode == KEY_F6 or (event.keycode == KEY_L and event.ctrl_pressed):
+		if event.keycode == KEY_F6 or (event.keycode == KEY_L and event.is_command_or_control_pressed()):
 			_enter_edit_mode()
 			get_viewport().set_input_as_handled()
 			return
@@ -660,4 +682,260 @@ func _on_files_dropped(paths: PackedStringArray) -> void:
 		# Mixed sources – just display the dropped files directly.
 		_files = collected
 		_subfolders.clear()
+		_mtime_cache.clear()
+		_size_cache.clear()
 		_refresh_grid()
+		call_deferred("_refresh_nav_rail")
+
+
+# ──────────────────────────── Nav rail ─────────────────────────────
+
+func _mtime_for(p: String) -> int:
+	if not _mtime_cache.has(p):
+		_mtime_cache[p] = int(FileAccess.get_modified_time(p))
+	return _mtime_cache[p]
+
+
+func _size_for(p: String) -> int:
+	if not _size_cache.has(p):
+		var f := FileAccess.open(p, FileAccess.READ)
+		_size_cache[p] = f.get_length() if f else 0
+	return _size_cache[p]
+
+
+func _size_bucket(b: int) -> int:
+	for i in SIZE_BOUNDARIES.size():
+		if b < SIZE_BOUNDARIES[i]:
+			return i
+	return SIZE_BOUNDARIES.size()
+
+
+func _name_key(p: String) -> String:
+	var f := p.get_file()
+	if f.is_empty():
+		return "#"
+	var c := f.substr(0, 1).to_upper()
+	return c if c >= "A" and c <= "Z" else "#"
+
+
+func _format_month_year(y: int, m: int) -> String:
+	return "%s %d" % [MONTH_NAMES[clampi(m - 1, 0, 11)], y]
+
+
+func _max_scroll() -> float:
+	return _grid.custom_minimum_size.y - _scroll.size.y
+
+
+func _pos_for_index(idx: int) -> float:
+	var cols := maxi(1, _grid.column_count())
+	var row := idx / cols
+	var row_step := _grid.item_height + _grid.spacing
+	var maxs := _max_scroll()
+	if maxs <= 0.0:
+		return 0.0
+	return clampf(float(row * row_step) / maxs, 0.0, 1.0)
+
+
+func _refresh_nav_rail() -> void:
+	if not is_instance_valid(_nav_rail):
+		return
+	_nav_rail.set_landmarks(_compute_landmarks())
+	_update_rail_state()
+
+
+func _on_scroll_changed(_v: float) -> void:
+	_update_rail_state()
+
+
+func _on_nav_seek(pos: float) -> void:
+	var maxs := _max_scroll()
+	if maxs <= 0.0:
+		return
+	_scroll.scroll_vertical = int(round(pos * maxs))
+
+
+func _update_rail_state() -> void:
+	var maxs := _max_scroll()
+	var p := 0.0 if maxs <= 0.0 else clampf(float(_scroll.scroll_vertical) / maxs, 0.0, 1.0)
+	_nav_rail.set_progress(p)
+	_nav_rail.set_current_label(_label_for_idx(_grid._top_visible_index()))
+
+
+func _label_for_idx(idx: int) -> String:
+	var total := _subfolders.size() + _files.size()
+	if idx < 0 or total == 0:
+		return ""
+	if idx < _subfolders.size():
+		return "📁 Folders"
+	var p: String = _files[idx - _subfolders.size()]
+	match _sort_mode:
+		SortMode.NAME:
+			return _name_key(p)
+		SortMode.MODIFIED:
+			var d := Time.get_datetime_dict_from_unix_time(_mtime_for(p))
+			return _format_month_year(d["year"], d["month"])
+		SortMode.SIZE:
+			return SIZE_LABELS[_size_bucket(_size_for(p))]
+		SortMode.TYPE:
+			return "." + p.get_extension().to_lower()
+	return ""
+
+
+func _compute_landmarks() -> Array:
+	var total := _subfolders.size() + _files.size()
+	if total == 0 or _grid.column_count() <= 0:
+		return []
+	var out: Array = []
+	if _subfolders.size() > 0:
+		out.append({"pos": _pos_for_index(0), "label": "📁 Folders", "major": true})
+	if _files.is_empty():
+		return out
+	var base := _subfolders.size()
+	var sections: Array
+	match _sort_mode:
+		SortMode.NAME:
+			sections = _sections_name(base)
+		SortMode.MODIFIED:
+			sections = _sections_modified(base)
+		SortMode.SIZE:
+			sections = _sections_size(base)
+		SortMode.TYPE:
+			sections = _sections_type(base)
+		_:
+			sections = []
+	for s in sections:
+		out.append({
+			"pos": _pos_for_index(s["index"]),
+			"label": s["label"],
+			"major": s["major"],
+		})
+	return out
+
+
+func _sections_name(base: int) -> Array:
+	var per_letter: Array = []
+	var prev := ""
+	for i in _files.size():
+		var k := _name_key(_files[i])
+		if k != prev:
+			per_letter.append({"index": base + i, "label": k})
+			prev = k
+	var out: Array = []
+	if per_letter.size() <= 13:
+		for s in per_letter:
+			out.append({"index": s["index"], "label": s["label"], "major": true})
+		return out
+	var bucket_size := int(ceil(float(per_letter.size()) / 13.0))
+	var i := 0
+	while i < per_letter.size():
+		var j := mini(i + bucket_size - 1, per_letter.size() - 1)
+		var a: String = per_letter[i]["label"]
+		var b: String = per_letter[j]["label"]
+		var lbl: String = a if a == b else "%s–%s" % [a, b]
+		out.append({
+			"index": per_letter[i]["index"],
+			"label": lbl,
+			"major": (i / bucket_size) % 2 == 0,
+		})
+		i += bucket_size
+	return out
+
+
+func _sections_modified(base: int) -> Array:
+	var months: Array = []
+	var prev_y := -1
+	var prev_m := -1
+	for i in _files.size():
+		var d := Time.get_datetime_dict_from_unix_time(_mtime_for(_files[i]))
+		var y: int = d["year"]
+		var m: int = d["month"]
+		if y != prev_y or m != prev_m:
+			months.append({"year": y, "month": m, "index": base + i})
+			prev_y = y
+			prev_m = m
+	if months.is_empty():
+		return []
+	# Span may be negative if descending; use absolute values.
+	var ya: int = months[0]["year"]
+	var yb: int = months[months.size() - 1]["year"]
+	var ma: int = months[0]["month"]
+	var mb: int = months[months.size() - 1]["month"]
+	var span_months: int = absi((yb - ya) * 12 + (mb - ma))
+	var span_years: int = absi(yb - ya)
+
+	var out: Array = []
+	if span_months <= 24:
+		for idx in months.size():
+			var s: Dictionary = months[idx]
+			out.append({
+				"index": s["index"],
+				"label": _format_month_year(s["year"], s["month"]),
+				"major": s["month"] == 1 or idx == 0,
+			})
+	elif span_years <= 20:
+		var seen := {}
+		for s in months:
+			if seen.has(s["year"]):
+				continue
+			seen[s["year"]] = true
+			out.append({
+				"index": s["index"],
+				"label": str(s["year"]),
+				"major": s["year"] % 5 == 0,
+			})
+	else:
+		var seen2 := {}
+		for s in months:
+			var bucket := int(s["year"] / 5) * 5
+			if seen2.has(bucket):
+				continue
+			seen2[bucket] = true
+			out.append({
+				"index": s["index"],
+				"label": "%ds" % bucket,
+				"major": true,
+			})
+	return out
+
+
+func _sections_size(base: int) -> Array:
+	var out: Array = []
+	var prev := -1
+	for i in _files.size():
+		var b := _size_bucket(_size_for(_files[i]))
+		if b != prev:
+			out.append({
+				"index": base + i,
+				"label": SIZE_LABELS[b],
+				"major": SIZE_MAJOR_BUCKET[b],
+			})
+			prev = b
+	return out
+
+
+func _sections_type(base: int) -> Array:
+	var per_ext: Array = []
+	var counts := {}
+	var prev := ""
+	for i in _files.size():
+		var ext: String = _files[i].get_extension().to_lower()
+		counts[ext] = counts.get(ext, 0) + 1
+		if ext != prev:
+			per_ext.append({"ext": ext, "index": base + i})
+			prev = ext
+	if per_ext.size() <= 12:
+		var out: Array = []
+		for s in per_ext:
+			out.append({"index": s["index"], "label": "." + str(s["ext"]), "major": true})
+		return out
+	var threshold: int = maxi(1, int(0.02 * _files.size()))
+	var out2: Array = []
+	var in_other := false
+	for s in per_ext:
+		if counts[s["ext"]] >= threshold:
+			in_other = false
+			out2.append({"index": s["index"], "label": "." + str(s["ext"]), "major": true})
+		elif not in_other:
+			in_other = true
+			out2.append({"index": s["index"], "label": "other", "major": false})
+	return out2
