@@ -2,6 +2,7 @@
 
 [ext_resource type="Script" uid="uid://bmv3vll605teg" path="res://scripts/GalleryView.gd" id="1_galview"]
 [ext_resource type="Script" path="res://scripts/VirtualGrid.gd" id="2_vgrid"]
+[ext_resource type="Script" path="res://scripts/ScrollNavRail.gd" id="3_navrail"]
 
 [node name="GalleryView" type="Control" unique_id=411672262]
 layout_mode = 3
@@ -146,25 +147,46 @@ layout_mode = 2
 [node name="Separator" type="HSeparator" parent="VBox" unique_id=216462993]
 layout_mode = 2
 
-[node name="Scroll" type="ScrollContainer" parent="VBox" unique_id=1806626884]
-unique_name_in_owner = true
+[node name="ScrollWrap" type="Control" parent="VBox" unique_id=1612345001]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 
-[node name="Pad" type="MarginContainer" parent="VBox/Scroll" unique_id=163734363]
+[node name="Scroll" type="ScrollContainer" parent="VBox/ScrollWrap" unique_id=1806626884]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+vertical_scroll_mode = 3
+
+[node name="Pad" type="MarginContainer" parent="VBox/ScrollWrap/Scroll" unique_id=163734363]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/margin_left = 12
 theme_override_constants/margin_top = 12
-theme_override_constants/margin_right = 12
+theme_override_constants/margin_right = 24
 theme_override_constants/margin_bottom = 12
 
-[node name="Grid" type="Control" parent="VBox/Scroll/Pad" unique_id=400830779]
+[node name="Grid" type="Control" parent="VBox/ScrollWrap/Scroll/Pad" unique_id=400830779]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 script = ExtResource("2_vgrid")
+
+[node name="NavRail" type="Control" parent="VBox/ScrollWrap" unique_id=1612345002]
+unique_name_in_owner = true
+layout_mode = 1
+anchor_left = 1.0
+anchor_top = 0.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -18.0
+offset_right = 0.0
+grow_horizontal = 0
+script = ExtResource("3_navrail")
 
 [node name="StatusLabel" type="Label" parent="." unique_id=1202493203]
 unique_name_in_owner = true
