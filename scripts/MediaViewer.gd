@@ -232,20 +232,21 @@ func _load_video(path: String) -> void:
 	var ext := path.get_extension().to_lower()
 	var stream: VideoStream = null
 
-	match ext:
-		"ogv":
-			var s := VideoStreamTheora.new()
-			s.set_file(path)
-			stream = s
-		"webm":
-			if ClassDB.class_exists("VideoStreamWebm"):
-				var s: VideoStream = ClassDB.instantiate("VideoStreamWebm")
-				s.call("set_file", path)
+	if ClassDB.class_exists("FFmpegVideoStream"):
+		var s := FFmpegVideoStream.new()
+		s.file = path
+		stream = s
+	else:
+		match ext:
+			"ogv":
+				var s := VideoStreamTheora.new()
+				s.set_file(path)
 				stream = s
-		_:
-			# mp4, avi, mkv, mov and others are not supported by Godot natively.
-			# A GDExtension (e.g. ffmpeg plugin) would be required.
-			pass
+			"webm":
+				if ClassDB.class_exists("VideoStreamWebm"):
+					var s: VideoStream = ClassDB.instantiate("VideoStreamWebm")
+					s.call("set_file", path)
+					stream = s
 
 	if stream:
 		_vid_player.stream = stream
@@ -341,8 +342,16 @@ func _apply_transform() -> void:
 	_anchor.scale        = Vector2(s, s)
 	_anchor.rotation_degrees = _rot_deg
 
-	_img_rect.size   = vp
-	_vid_player.size = vp
+	_img_rect.size = vp
+
+	if _is_video and _img_size != Vector2.ZERO:
+		var scale: float = min(vp.x / _img_size.x, vp.y / _img_size.y)
+		var vid_size: Vector2 = _img_size * scale
+		_vid_player.size = vid_size
+		_vid_player.position = (vp - vid_size) * 0.5
+	else:
+		_vid_player.size = vp
+		_vid_player.position = Vector2.ZERO
 
 	_zoom_lbl.text = "%d%%" % int(_zoom * 100.0)
 
@@ -418,6 +427,13 @@ func _on_seek_bar_value_changed(value: float) -> void:
 func _process(_dt: float) -> void:
 	if not visible or not _is_video or _vid_player.stream == null:
 		return
+
+	if _img_size == Vector2.ZERO:
+		var tex := _vid_player.get_video_texture()
+		if tex and tex.get_size() != Vector2.ZERO:
+			_img_size = tex.get_size()
+			_reset_transform()
+
 	if _seeking:
 		return
 	var len_ := _vid_player.get_stream_length()
