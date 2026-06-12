@@ -21,6 +21,7 @@ var _zoom: float = 1.0
 
 var _thumb_cache: Dictionary = {}             # key: "path|mtime|w|h" → ImageTexture
 var _thumb_cache_order: Array[String] = []    # LRU queue, oldest first
+var _ffmpeg_path := ""                        # empty = unchecked, "NONE" = not found
 
 var _current_folder: String = ""
 var _files: Array[String] = []       # media files in current folder
@@ -376,18 +377,48 @@ func _make_file_thumb(index: int) -> Control:
 	btn.add_child(vbox)
 
 	if is_video:
-		var placeholder := ColorRect.new()
-		placeholder.custom_minimum_size = Vector2(tw - 8, ti)
-		placeholder.color = Color("#1a2040")
-		placeholder.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		vbox.add_child(placeholder)
+		if _ffmpeg_available():
+			var wrapper := Control.new()
+			wrapper.custom_minimum_size = Vector2(tw - 8, ti)
+			wrapper.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			vbox.add_child(wrapper)
 
-		var lbl := Label.new()
-		lbl.text = "▶  VIDEO"
-		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-		lbl.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		placeholder.add_child(lbl)
+			var placeholder := ColorRect.new()
+			placeholder.color = Color("#1a1a1a")
+			placeholder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			placeholder.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+			wrapper.add_child(placeholder)
+
+			var loading_lbl := Label.new()
+			loading_lbl.text = "⏳"
+			loading_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			loading_lbl.add_theme_font_size_override("font_size", int(36 * _zoom))
+			loading_lbl.modulate = Color(1, 1, 1, 0.5)
+			loading_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			loading_lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+			loading_lbl.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+			placeholder.add_child(loading_lbl)
+
+			var tex_rect := TextureRect.new()
+			tex_rect.expand_mode  = TextureRect.EXPAND_IGNORE_SIZE
+			tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			tex_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			tex_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+			wrapper.add_child(tex_rect)
+			_load_video_thumb_deferred(path, tex_rect, placeholder, tw, ti)
+		else:
+			var placeholder := ColorRect.new()
+			placeholder.custom_minimum_size = Vector2(tw - 8, ti)
+			placeholder.color = Color("#1a2040")
+			placeholder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			vbox.add_child(placeholder)
+
+			var lbl := Label.new()
+			lbl.text = "▶  VIDEO"
+			lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+			lbl.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+			placeholder.add_child(lbl)
 	else:
 		var wrapper := Control.new()
 		wrapper.custom_minimum_size = Vector2(tw - 8, ti)
@@ -499,6 +530,92 @@ func _touch_cache(key: String) -> void:
 	while _thumb_cache_order.size() > THUMB_CACHE_MAX:
 		var evict: String = _thumb_cache_order.pop_front()
 		_thumb_cache.erase(evict)
+
+
+func _ffmpeg_available() -> bool:
+	if _ffmpeg_path == "":
+		for candidate in ["ffmpeg", "/usr/local/bin/ffmpeg", "/opt/homebrew/bin/ffmpeg"]:
+			var out := []
+			if OS.execute(candidate, ["-version"], out, true) == 0:
+				_ffmpeg_path = candidate
+				return true
+		_ffmpeg_path = "NONE"
+		return false
+	return _ffmpeg_path != "NONE"
+
+
+func _load_video_thumb_deferred(path: String, tex_rect: TextureRect, placeholder: ColorRect, w: int, h: int) -> void:
+	if not is_instance_valid(tex_rect):
+		return
+	var gen := _nav_gen
+
+	var mtime := FileAccess.get_modified_time(path)
+	var key := "v|%s|%d|%d|%d" % [path, mtime, w, h]
+	if _thumb_cache.has(key):
+		if is_instance_valid(placeholder): placeholder.hide()
+		if is_instance_valid(tex_rect): tex_rect.texture = _thumb_cache[key]
+		_touch_cache(key)
+		return
+
+	await get_tree().process_frame
+	if gen != _nav_gen or not is_instance_valid(tex_rect):
+		return
+
+	while _loading_count >= MAX_THUMB_TASKS:
+		if gen != _nav_gen or not is_inside_tree():
+			return
+		await get_tree().process_frame
+
+	if not is_instance_valid(tex_rect):
+		return
+
+	_loading_count += 1
+	var state := {"img": null, "done": false}
+	var tmp := OS.get_user_data_dir().path_join("vthumb_%s_%d_%d.png" % [path.md5_text(), w, h])
+
+	WorkerThreadPool.add_task(func() -> void:
+		var out := []
+		OS.execute(_ffmpeg_path, [
+			"-y",
+			"-i", path,
+			"-ss", "00:00:01",
+			"-vframes", "1",
+			"-f", "image2",
+			tmp
+		], out, true)
+		var loaded := Image.load_from_file(tmp)
+		if loaded:
+			var sw := loaded.get_width()
+			var sh := loaded.get_height()
+			if sw > 0 and sh > 0:
+				var scale := minf(float(w) / sw, float(h) / sh)
+				if scale < 1.0:
+					loaded.resize(int(sw * scale), int(sh * scale), Image.INTERPOLATE_BILINEAR)
+			state["img"] = loaded
+		DirAccess.remove_absolute(tmp)
+		state["done"] = true
+	)
+
+	while not state["done"]:
+		if gen != _nav_gen or not is_inside_tree():
+			_loading_count -= 1
+			return
+		await get_tree().process_frame
+
+	_loading_count -= 1
+	if gen != _nav_gen:
+		return
+
+	var img := state["img"] as Image
+	if not img:
+		return
+	var tex := ImageTexture.create_from_image(img)
+	_thumb_cache[key] = tex
+	_touch_cache(key)
+	if is_instance_valid(placeholder):
+		placeholder.hide()
+	if is_instance_valid(tex_rect):
+		tex_rect.texture = tex
 
 
 # ──────────────────────────── Zoom ─────────────────────────────────
