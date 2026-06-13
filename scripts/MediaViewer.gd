@@ -11,7 +11,6 @@
 ##   F            → fit to screen  (press again to fill / cover)
 ##   Q            → rotate 90° counter-clockwise
 ##   E  or  R     → rotate 90° clockwise
-##   Ctrl/Cmd + R or F5 → reload current file from disk
 ##   Space        → play / pause video
 ##   F11          → toggle fullscreen
 ##   M            → mute / unmute video
@@ -654,17 +653,11 @@ func _handle_key(ev: InputEventKey) -> void:
 			if not _crop_mode:
 				_rotate_by(-90.0)
 		KEY_R, KEY_E:
-			if (ev.ctrl_pressed or ev.meta_pressed) and ev.keycode == KEY_R:
-				if not _crop_mode and not _trim_mode:
-					_load_current()
-			elif not _crop_mode:
+			if not _crop_mode:
 				if ev.shift_pressed:
 					_rotate_by(-90.0)
 				else:
 					_rotate_by(90.0)
-		KEY_F5:
-			if not _crop_mode and not _trim_mode:
-				_load_current()
 		KEY_SPACE:
 			_toggle_play()
 		KEY_F11:
@@ -1129,7 +1122,14 @@ func _update_trim_label() -> void:
 
 
 func _find_ffmpeg() -> String:
-	for candidate in ["ffmpeg", "/usr/local/bin/ffmpeg", "/opt/homebrew/bin/ffmpeg"]:
+	for candidate in [
+		"ffmpeg",
+		"/usr/local/bin/ffmpeg",
+		"/opt/homebrew/bin/ffmpeg",
+		OS.get_environment("HOME").path_join(".nix-profile/bin/ffmpeg"),
+		"/nix/var/nix/profiles/default/bin/ffmpeg",
+		"/run/current-system/sw/bin/ffmpeg",
+	]:
 		var out := []
 		if OS.execute(candidate, ["-version"], out, true) == 0:
 			return candidate

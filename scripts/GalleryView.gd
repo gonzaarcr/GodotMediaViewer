@@ -174,6 +174,19 @@ func _go_up() -> void:
 		_navigate_to(parent)
 
 
+# Re-scan the current folder to pick up added/removed/renamed files, keeping the
+# user where they were scrolled rather than jumping back to the top.
+func _refresh_folder() -> void:
+	if _current_folder == "":
+		return
+	var scroll := _scroll.scroll_vertical
+	_navigate_to(_current_folder, false)
+	# _navigate_to → _apply_sort → _refresh_grid rebuilds the grid this frame;
+	# restore scroll once the new layout's size is settled.
+	await get_tree().process_frame
+	_scroll.scroll_vertical = scroll
+
+
 func _update_breadcrumbs() -> void:
 	for c in _breadcrumb_bar.get_children():
 		c.queue_free()
@@ -712,6 +725,10 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed:
 		if event.keycode == KEY_F6 or (event.keycode == KEY_L and event.is_command_or_control_pressed()):
 			_enter_edit_mode()
+			get_viewport().set_input_as_handled()
+			return
+		if event.keycode == KEY_F5 or (event.keycode == KEY_R and event.is_command_or_control_pressed()):
+			_refresh_folder()
 			get_viewport().set_input_as_handled()
 			return
 		if event.alt_pressed:
