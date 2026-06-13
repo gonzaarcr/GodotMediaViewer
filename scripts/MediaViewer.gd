@@ -11,6 +11,7 @@
 ##   F            → fit to screen  (press again to fill / cover)
 ##   Q            → rotate 90° counter-clockwise
 ##   E  or  R     → rotate 90° clockwise
+##   Ctrl/Cmd + R or F5 → reload current file from disk
 ##   Space        → play / pause video
 ##   F11          → toggle fullscreen
 ##   M            → mute / unmute video
@@ -233,8 +234,8 @@ func _load_video(path: String) -> void:
 	var stream: VideoStream = null
 
 	if ClassDB.class_exists("FFmpegVideoStream"):
-		var s := FFmpegVideoStream.new()
-		s.file = path
+		var s: VideoStream = ClassDB.instantiate("FFmpegVideoStream")
+		s.set("file", path)
 		stream = s
 	else:
 		match ext:
@@ -653,11 +654,17 @@ func _handle_key(ev: InputEventKey) -> void:
 			if not _crop_mode:
 				_rotate_by(-90.0)
 		KEY_R, KEY_E:
-			if not _crop_mode:
+			if (ev.ctrl_pressed or ev.meta_pressed) and ev.keycode == KEY_R:
+				if not _crop_mode and not _trim_mode:
+					_load_current()
+			elif not _crop_mode:
 				if ev.shift_pressed:
 					_rotate_by(-90.0)
 				else:
 					_rotate_by(90.0)
+		KEY_F5:
+			if not _crop_mode and not _trim_mode:
+				_load_current()
 		KEY_SPACE:
 			_toggle_play()
 		KEY_F11:
